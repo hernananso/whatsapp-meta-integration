@@ -13,7 +13,12 @@ const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN ||
 const BASE_URL =
   "https://whatsapp-meta-integration-lzm9.onrender.com";
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify: (req, res, buf) => {
+    req.rawBody = Buffer.from(buf);
+  }
+}));
 
 app.get("/", (req, res) => {
   res.send("WhatsApp Meta Integration - Centros Educativos OK");
@@ -82,13 +87,69 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// Recepción de eventos de WhatsApp
+
+// Verificación de firma de Meta
+function verificarFirmaMeta(req) {
+  const secret = process.env.META_APP_SECRET;
+  const firma = req.get("x-hub-signature-256");
+
+  if (!secret || !firma || !req.rawBody) {
+    return false;
+  }
+
+  if (!/^sha256=[a-f0-9]{64}$/i.test(firma)) {
+    return false;
+  }
+
+  const firmaEsperada = crypto
+    .createHmac("sha256", secret)
+    .update(req.rawBody)
+    .digest();
+
+  const firmaRecibida = Buffer.from(
+    firma.slice(7),
+    "hex"
+  );
+
+  return crypto.timingSafeEqual(
+    firmaEsperada,
+    firmaRecibida
+  );
+}
+
+// Recepción segura de eventos de WhatsApp
 app.post("/webhook", (req, res) => {
-  // La validación de firma de Meta se incorporará
-  // antes de procesar mensajes o datos personales.
-  console.log("Evento de webhook recibido");
+  if (!verificarFirmaMeta(req)) {
+    console.warn("Webhook rechazado: firma inválida");
+    return res.sendStatus(403);
+  }
+
+  if (req.body?.object !== "whatsapp_business_account") {
+    return res.sendStatus(200);
+  }
+
+  const entradas = req.body.entry || [];
+
+  for (const entrada of entradas) {
+    for (const cambio of entrada.changes || []) {
+      if (cambio.field === "messages") {
+        const mensajes = cambio.value?.messages || [];
+        const estados = cambio.value?.statuses || [];
+
+        console.log(
+          "Evento WhatsApp verificado",
+          JSON.stringify({
+            mensajes: mensajes.length,
+            estados: estados.length
+          })
+        );
+      }
+    }
+  }
+
   return res.sendStatus(200);
 });
+
 
 // Página informativa de Embedded Signup
 app.get("/embedded-signup", (req, res) => {
